@@ -1,0 +1,6 @@
+numpy
+pandas
+pyyaml
+mealpy>=3.0.0
+matplotlib
+pytest
