@@ -4,4 +4,3 @@ mealpy>=3.0.0
 pyyaml
 matplotlib
 scipy
-pytest

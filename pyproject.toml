@@ -1,0 +1,19 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "wban_opt"
+version = "0.1.0"
+requires-python = ">=3.10"
+dependencies = [
+    "numpy",
+    "pandas",
+    "mealpy>=3.0.0",
+    "pyyaml",
+    "matplotlib",
+    "scipy"
+]
+
+[tool.setuptools.packages.find]
+where = ["src"]

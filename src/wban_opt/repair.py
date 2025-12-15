@@ -1,54 +1,50 @@
-from __future__ import annotations
-
 import numpy as np
-
 
 def decode_to_indices(x: np.ndarray, M: int) -> np.ndarray:
     """
-    Mapuje x (D,) na indeksy 0..M-1.
-    D = N + K
-    Działa stabilnie nawet jeśli algorytm wygeneruje wartości poza [0,1].
-
-    Reguła:
-    - clip do [0, 1)
-    - idx = floor(x * M)
+    Mapuje ciągły wektor x z [0, 1] na indeksy całkowite [0, M-1].
     """
-    x = np.asarray(x, dtype=float)
-    if M <= 0:
-        raise ValueError("M musi być dodatnie")
-    # clip do [0, 1-eps], żeby floor nie dawał M
-    eps = np.finfo(float).eps
-    xc = np.clip(x, 0.0, 1.0 - eps)
-    idx = np.floor(xc * M).astype(int)
-    return idx
+    # Clip na wszelki wypadek (chociaż Mealpy trzyma bounds)
+    x_clipped = np.clip(x, 0.0, 0.9999999)
+    indices = np.floor(x_clipped * M).astype(int)
+    return indices
 
-
-def repair_unique(idx: np.ndarray, M: int) -> np.ndarray:
+def repair_unique(indices: np.ndarray, M: int, rng: np.random.Generator = None) -> np.ndarray:
     """
-    Naprawa unikalności indeksów (SN+CH nie mogą wskazywać tego samego punktu).
-    Zakłada, że D <= M.
-
-    Strategia:
-    - zachowaj pierwsze wystąpienia
-    - duplikaty zamień na kolejne wolne indeksy
+    Zapewnia unikalność indeksów w wektorze.
+    Konflikty zastępuje losowymi wolnymi indeksami.
     """
-    idx = np.asarray(idx, dtype=int).copy()
-    D = idx.shape[0]
+    if rng is None:
+        rng = np.random.default_rng()
+
+    D = len(indices)
     if D > M:
-        raise ValueError(f"Nie da się zapewnić unikalności: D={D} > M={M}")
+        raise ValueError(f"Nie można wybrać {D} unikalnych z puli {M}!")
 
-    used = set()
-    # wolne indeksy
-    free = [i for i in range(M) if i not in set(idx)]
-    free_it = iter(free)
+    unique_vals, counts = np.unique(indices, return_counts=True)
+    
+    # Jeśli mamy tyle unikalnych co długość wektora, jest OK
+    if len(unique_vals) == D:
+        return indices
 
+    # Znajdź dostępne (wolne) indeksy
+    all_indices = set(range(M))
+    used_indices = set(unique_vals)
+    available = list(all_indices - used_indices)
+    rng.shuffle(available)
+
+    # Naprawa
+    result = indices.copy()
+    seen = set()
+    
+    replace_ptr = 0
     for i in range(D):
-        v = int(idx[i])
-        if v not in used:
-            used.add(v)
-            continue
-        # duplikat -> bierzemy pierwszy wolny
-        idx[i] = next(free_it)
-        used.add(int(idx[i]))
-
-    return idx
+        val = result[i]
+        if val in seen:
+            # Konflikt -> bierzemy z puli available
+            result[i] = available[replace_ptr]
+            replace_ptr += 1
+        else:
+            seen.add(val)
+            
+    return result

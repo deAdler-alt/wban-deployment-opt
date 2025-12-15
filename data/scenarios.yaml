@@ -2,53 +2,50 @@ common:
   body_map:
     width_m: 0.6
     height_m: 1.8
-
   energy:
-    E_elec: 50e-9
-    E_fs: 10e-12
+    E_elec: 50.0e-9
+    E_fs: 10.0e-12
     E_mp: 1.3e-15
-    E_agg: 5e-9
+    E_agg: 5.0e-9
     E_init: 0.5
     packet_bits: 4000
     beta_agg: 1.0
-
   constraints:
     d_max_sn_ch: 0.7
-    penalty_range: 1e6
-
+    penalty_range: 1.0e6
   optimization:
-    epochs: 100
-    pop_size: 50
-    n_runs: 30
-    seed0: 1000
+    epochs: 50
+    pop_size: 30
+    n_runs: 5   # Zwiększ do 30 przed finalnym uruchomieniem
+    seed0: 42
 
 scenarios:
-  - name: S1
+  - name: "S1"
     N: 8
     K: 1
     M: 20
-    gw_variants: ["GW1_BELT"]
+    gw_variants: ["GW1"]
 
-  - name: S2a
+  - name: "S2a"
     N: 12
     K: 2
     M: 20
-    gw_variants: ["GW1_BELT"]
+    gw_variants: ["GW1"]
 
-  - name: S2b
+  - name: "S2b"
     N: 12
     K: 2
     M: 20
-    gw_variants: ["GW2_CHEST"]
+    gw_variants: ["GW2"]
 
-  - name: S3
+  - name: "S3"
     N: 20
     K: 3
     M: 24
-    gw_variants: ["GW1_BELT"]
+    gw_variants: ["GW1"]
 
-  - name: S4
+  - name: "S4"
     N: 30
     K: 4
-    M: 30
-    gw_variants: ["GW1_BELT"]
+    M: 50
+    gw_variants: ["GW1"]

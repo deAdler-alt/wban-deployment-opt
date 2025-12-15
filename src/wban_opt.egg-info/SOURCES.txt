@@ -15,6 +15,7 @@ src/wban_opt/repair.py
 src/wban_opt.egg-info/PKG-INFO
 src/wban_opt.egg-info/SOURCES.txt
 src/wban_opt.egg-info/dependency_links.txt
+src/wban_opt.egg-info/requires.txt
 src/wban_opt.egg-info/top_level.txt
 tests/test_objective.py
 tests/test_repair.py

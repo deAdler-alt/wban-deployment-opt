@@ -1,120 +1,82 @@
-from __future__ import annotations
-
-from dataclasses import dataclass
-from typing import List, Tuple
-
 import numpy as np
-
-from .config import Point
-from .geometry import points_xy
-from .repair import decode_to_indices, repair_unique
+from dataclasses import dataclass
+from .geometry import points_to_numpy, pairwise_dist
 from .assignment import assign_sensors_to_ch
+from .energy_model import EnergyParams, calc_E_tx, calc_E_rx, calc_E_da
 from .penalties import penalty_range_sn_ch
-from .energy_model import EnergyParams, E_tx, E_rx, E_da
-
+from .repair import decode_to_indices, repair_unique
 
 @dataclass(frozen=True)
 class ObjectiveContext:
-    # P: lista punktów montażu (M punktów)
-    points: List[Point]
-
-    # N: liczba sensorów
+    points_pool: np.ndarray  # (M, 2)
     N: int
-
-    # K: liczba koncentratorów / CH
     K: int
-
-    # pozycja bramki (GW)
-    gw_xy: Tuple[float, float]
-
-    # parametry energetyczne
-    energy: EnergyParams
-
-    # constraint zasięgu SN->CH
+    gw_xy: np.ndarray        # (1, 2)
+    energy_params: EnergyParams
     d_max_sn_ch: float
+    penalty_weight: float
+    
+    def get_D(self):
+        return self.N + self.K
 
-    # współczynnik kary (miękki constraint)
-    penalty_range: float
-
-
-def energy_and_penalty_from_x(x: np.ndarray, ctx: ObjectiveContext) -> tuple[float, float]:
+def energy_and_penalty_from_x(x: np.ndarray, ctx: ObjectiveContext) -> tuple[float, float, bool]:
     """
-    Zwraca (E_total, Penalty) dla wektora x długości D=N+K.
-
-    - x ∈ [0,1]^(N+K) (Mealpy)
-    - dekodowanie -> indeksy punktów z P
-    - naprawa unikalności (brak kolizji indeksów)
-    - przypisanie sensorów do najbliższego CH
-    - energia: SN TX do CH, CH RX+DA+TX do GW
-    - kara: przekroczenia d_max dla SN->CH
+    Główna logika: x -> (Energy, Penalty, Feasible)
     """
-    x = np.asarray(x, dtype=float)
-    M = len(ctx.points)
-    D = int(ctx.N) + int(ctx.K)
-
-    if x.shape[0] != D:
-        raise ValueError(f"Zły wymiar x: {x.shape[0]} != D={D}")
-
-    # 1) mapowanie x -> indeksy 0..M-1
-    idx = decode_to_indices(x, M)
-
-    # 2) naprawa unikalności (SN+CH nie mogą wskazywać tego samego punktu)
-    idx = repair_unique(idx, M)
-
-    # 3) indeksy -> współrzędne
-    p_xy = points_xy(ctx.points)               # (M,2)
-    sn_idx = idx[: ctx.N]
-    ch_idx = idx[ctx.N :]
-
-    sn_xy = p_xy[sn_idx]                       # (N,2)
-    ch_xy = p_xy[ch_idx]                       # (K,2)
-    gw_xy = np.asarray(ctx.gw_xy, dtype=float) # (2,)
-
-    # 4) przypisanie sensorów do najbliższego CH
-    assign = assign_sensors_to_ch(sn_xy, ch_xy)  # (N,) int w [0..K-1]
-
-    k = int(ctx.energy.packet_bits)
-    beta = float(ctx.energy.beta_agg)
-
-    # 5) energia sensorów: TX do CH
-    E_sensors = 0.0
-    for i in range(ctx.N):
-        j = int(assign[i])
-        d = float(np.linalg.norm(sn_xy[i] - ch_xy[j]))
-        E_sensors += E_tx(k, d, ctx.energy)
-
-    # 6) energia CH: RX od członków + agregacja + TX do GW
-    E_ch = 0.0
+    M = ctx.points_pool.shape[0]
+    
+    # 1. Decode & Repair
+    raw_idx = decode_to_indices(x, M)
+    clean_idx = repair_unique(raw_idx, M) # Strategia losowa, ale wewnątrz funkcji celu determinizm wymagałby fixed seed
+                                          # W Mealpy dla stochastyczności OK, dla evaluacji końcowej ostrożnie.
+                                          # Tutaj zakładamy "miękkie" repair dla procesu ewolucji.
+    
+    # 2. Split SN / CH
+    sn_indices = clean_idx[:ctx.N]
+    ch_indices = clean_idx[ctx.N:]
+    
+    sn_xy = ctx.points_pool[sn_indices]
+    ch_xy = ctx.points_pool[ch_indices]
+    
+    # 3. Assignment
+    assignment = assign_sensors_to_ch(sn_xy, ch_xy)
+    
+    # 4. Energy Calculation
+    # A. Sensors TX
+    assigned_ch_xy = ch_xy[assignment]
+    dists_sn_ch = np.linalg.norm(sn_xy - assigned_ch_xy, axis=1)
+    
+    E_sn_total = 0.0
+    for d in dists_sn_ch:
+        E_sn_total += calc_E_tx(ctx.energy_params.packet_bits, d, ctx.energy_params)
+        
+    # B. CH Nodes (RX + Agg + TX to GW)
+    E_ch_total = 0.0
+    # Policz ile sensorów na każdy CH
+    counts = np.bincount(assignment, minlength=ctx.K)
+    
+    dists_ch_gw = np.linalg.norm(ch_xy - ctx.gw_xy, axis=1)
+    
     for j in range(ctx.K):
-        members = np.where(assign == j)[0]
-        m = int(len(members))
-        if m == 0:
-            continue
-
-        E_ch += m * E_rx(k, ctx.energy)
-        E_ch += m * E_da(k, ctx.energy)
-
-        k_aggr = int(beta * m * k)
-        d_gw = float(np.linalg.norm(ch_xy[j] - gw_xy))
-        E_ch += E_tx(k_aggr, d_gw, ctx.energy)
-
-    E_total = float(E_sensors + E_ch)
-
-    # 7) kara za przekroczenie zasięgu SN->CH (miękki constraint)
-    P = penalty_range_sn_ch(
-        sn_xy=sn_xy,
-        ch_xy=ch_xy,
-        assign=assign,
-        dmax=float(ctx.d_max_sn_ch),
-        lam=float(ctx.penalty_range),
-    )
-
-    return E_total, float(P)
-
+        m_j = counts[j] # liczba sensorów podpiętych
+        if m_j > 0:
+            # RX
+            E_ch_total += calc_E_rx(ctx.energy_params.packet_bits * m_j, ctx.energy_params)
+            # DA
+            E_ch_total += calc_E_da(ctx.energy_params.packet_bits * m_j, ctx.energy_params)
+            # TX -> GW
+            k_aggr = ctx.energy_params.packet_bits * m_j * ctx.energy_params.beta_agg
+            E_ch_total += calc_E_tx(k_aggr, dists_ch_gw[j], ctx.energy_params)
+            
+    E_total = E_sn_total + E_ch_total
+    
+    # 5. Penalties
+    P = penalty_range_sn_ch(sn_xy, ch_xy, assignment, ctx.d_max_sn_ch, ctx.penalty_weight)
+    
+    is_feasible = (P == 0.0)
+    
+    return E_total, P, is_feasible
 
 def objective_from_x(x: np.ndarray, ctx: ObjectiveContext) -> float:
-    """
-    Funkcja celu (fitness) dla Mealpy: minimalizujemy E_total + Penalty.
-    """
-    E_total, P = energy_and_penalty_from_x(x, ctx)
-    return float(E_total + P)
+    E, P, _ = energy_and_penalty_from_x(x, ctx)
+    return E + P
